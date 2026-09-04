@@ -386,9 +386,15 @@ def test_selecting_an_entity_identifies_exactly_one_region(
     reliability is verified and reported separately and honestly in the ADR.
     """
     from app.contracts.record import FactLedger
+    from app.core.config import settings
     from app.modules.dialogue.ontology import load_ontology
     from app.modules.documents.pipeline import ingest
 
+    # `handwriting_ocr_enabled` defaults OFF (see config.py, and ADR-0017 for why) — real
+    # uploads go straight to Tesseract. This test is specifically about the handwriting
+    # lane's own region<->entity linking, so it turns the lane on for its own duration, the
+    # same way a test for a feature flag flips the flag to exercise the code it guards.
+    monkeypatch.setattr(settings, "handwriting_ocr_enabled", True)
     monkeypatch.setattr(
         handwriting,
         "default_recognizer",
@@ -404,6 +410,7 @@ def test_selecting_an_entity_identifies_exactly_one_region(
         filename="hw.jpg",
         media_type="image/jpeg",
         known_paths=load_ontology().known_paths,
+        backend_name="handwriting",
     )
     payload = result.to_dict()
     regions = {region["regionId"]: region for region in payload["ocrRegions"]}
@@ -418,10 +425,20 @@ def test_selecting_an_entity_identifies_exactly_one_region(
         assert item["itemId"] in regions[region_id]["itemIds"]
 
 
-def test_the_region_payload_carries_what_the_drawer_has_to_show() -> None:
+def test_the_region_payload_carries_what_the_drawer_has_to_show(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shape of `ocrRegions`/`quality`, when the handwriting lane is the one that ran.
+
+    Enabled explicitly for this test — see the note on
+    `test_selecting_an_entity_identifies_exactly_one_region` just above.
+    """
     from app.contracts.record import FactLedger
+    from app.core.config import settings
     from app.modules.dialogue.ontology import load_ontology
     from app.modules.documents.pipeline import ingest
+
+    monkeypatch.setattr(settings, "handwriting_ocr_enabled", True)
 
     ledger = FactLedger(session_id="s_payload", consent_scopes={"documents"})
     payload = ingest(
@@ -430,6 +447,7 @@ def test_the_region_payload_carries_what_the_drawer_has_to_show() -> None:
         filename="hw.jpg",
         media_type="image/jpeg",
         known_paths=load_ontology().known_paths,
+        backend_name="handwriting",
     ).to_dict()
 
     assert payload["quality"] is not None

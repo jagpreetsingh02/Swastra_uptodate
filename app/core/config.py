@@ -166,10 +166,25 @@ class Settings(BaseSettings):
     ocr_backend: Literal["textlayer", "tesseract", "handwriting"] = "textlayer"
 
     # --- handwriting OCR (the prescription lane) ------------------------------------
-    #: The master switch. Off, `handwriting` reports itself unavailable and every photograph
-    #: goes to Tesseract — which is also what happens when torch is not installed, so this is
-    #: for turning the model off on a machine that COULD run it.
-    handwriting_ocr_enabled: bool = True
+    #: The master switch. DEFAULTS OFF. Off, `handwriting` reports itself unavailable and
+    #: `backend_for()` sends every photograph to Tesseract — which is also what happens when
+    #: torch is not installed, so this is what lets the model be turned off on a machine that
+    #: could otherwise run it.
+    #:
+    #: WHY OFF BY DEFAULT, given the module it gates exists specifically to read handwriting.
+    #: `khedim/Medical-Prescription-OCR`, verified end to end with real authorised weights
+    #: (see docs/adr/ADR-0017-khedim-verified-and-found-collapsed.md), answers fluently and
+    #: confidently for ANY input — including a blank page, at 0.997 confidence — and NEVER
+    #: raises `UpstreamUnavailable`. Both of those together are fatal to using it as an
+    #: automatic default: `backend_for()` tries the handwriting engine before Tesseract for
+    #: every photograph, and because it always "succeeds", Tesseract never gets a turn. In
+    #: production this meant every single upload — handwritten or not, including ordinary
+    #: printed reports — came back with zero extracted entities, regardless of what was on
+    #: the page. Defaulting this off restores Tesseract as the engine real uploads actually
+    #: go through. The lane, the segmentation, the provenance and the review UI are unchanged
+    #: and fully tested; it is reachable by setting this true, or per-request with
+    #: `backend=handwriting`, once the checkpoint is one this has been re-verified against.
+    handwriting_ocr_enabled: bool = False
     #: A TrOCR fine-tune on handwritten prescription LINES. Any replacement must also be a
     #: line recognizer: a page-level model fails by silently returning one fluent line.
     handwriting_model_id: str = "khedim/Medical-Prescription-OCR"
