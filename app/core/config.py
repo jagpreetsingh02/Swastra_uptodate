@@ -163,7 +163,31 @@ class Settings(BaseSettings):
     vosk_model_dir: str | None = None
 
     # --- documents (Module B) ---
-    ocr_backend: Literal["textlayer", "tesseract"] = "textlayer"
+    ocr_backend: Literal["textlayer", "tesseract", "handwriting"] = "textlayer"
+
+    # --- handwriting OCR (the prescription lane) ------------------------------------
+    #: The master switch. Off, `handwriting` reports itself unavailable and every photograph
+    #: goes to Tesseract — which is also what happens when torch is not installed, so this is
+    #: for turning the model off on a machine that COULD run it.
+    handwriting_ocr_enabled: bool = True
+    #: A TrOCR fine-tune on handwritten prescription LINES. Any replacement must also be a
+    #: line recognizer: a page-level model fails by silently returning one fluent line.
+    handwriting_model_id: str = "khedim/Medical-Prescription-OCR"
+    #: Used when the fine-tune ships weights without tokenizer/image-processor configs, which
+    #: community checkpoints routinely do.
+    handwriting_processor_id: str = "microsoft/trocr-base-handwritten"
+    #: Last resort for the tokenizer half. TrOCR's decoder is RoBERTa and shares its
+    #: vocabulary, and unlike the TrOCR checkpoints this one publishes a `tokenizer.json`.
+    handwriting_tokenizer_id: str = "roberta-base"
+    handwriting_device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
+    handwriting_batch_size: int = 8
+    #: One prescription line. Well above the longest real one, and it also bounds the cost of
+    #: a decoder that has started to repeat itself.
+    handwriting_max_new_tokens: int = 64
+    #: A Hugging Face access token. `khedim/Medical-Prescription-OCR` is a GATED repo: without
+    #: a token that has been granted access the download 401s and the kiosk falls back to
+    #: Tesseract. Never logged.
+    hf_token: str | None = None
     #: Anything at or below this goes to the handwriting lane and is never auto-merged.
     ocr_low_confidence_threshold: float = 0.72
     #: Largest upload the kiosk will accept. This value already existed and was NEVER

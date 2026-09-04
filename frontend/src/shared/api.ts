@@ -263,6 +263,10 @@ export interface ExtractedItem {
   detail: Record<string, string | number | null | undefined>;
   observedOn: string | null;
   entityIndex?: number;
+  /** Which detected OCR region produced this. Null for engines that do not segment. */
+  regionId?: number | null;
+  /** False when the recogniser exposed no trustworthy score for the region. */
+  confidenceMeasured?: boolean;
   patientReview?: 'confirm' | 'correct' | 'dispute';
   patientReading?: string;
   patientDisputed?: boolean;
@@ -279,9 +283,47 @@ export interface SessionDocument {
   verifiedBy: string | null;
   kind: string;
   extracted: ExtractedItem[];
+  ocrRegions?: OcrRegion[];
+  quality?: OcrQuality | null;
+}
+
+/** One detected OCR region: a strip of the page, what was read from it, and how sure. */
+export interface OcrRegion {
+  regionId: number;
+  documentId: string;
+  page: number;
+  /** Normalised against the PREPARED page — the same convention `SourceCrop` uses, and the
+   *  same image `sessionDocumentFileUrl` serves. Origin top-left, each in [0, 1]. */
+  bbox: { x: number; y: number; width: number; height: number };
+  text: string;
+  /** NULL means the recogniser exposed no trustworthy score. It does not mean zero, and the
+   *  two must never render the same way. */
+  confidence: number | null;
+  confidenceBand: 'high' | 'medium' | 'verify' | 'unreadable';
+  backend: string;
+  cropWidth: number | null;
+  cropHeight: number | null;
+  failure: string | null;
+  /** `itemId`s of the entities this region produced. The link runs both ways: an item stores
+   *  `regionId`, a region lists its items. */
+  itemIds: string[];
+}
+
+/** Counts rather than a verdict, so a partly-readable page is reported as one. */
+export interface OcrQuality {
+  regionsDetected: number;
+  regionsRecognised: number;
+  regionsNeedingReview: number;
+  regionsUnreadable: number;
+  originalLongEdge: number | null;
+  underResolution: boolean;
+  medianLineHeight: number | null;
 }
 
 export interface UploadResult {
+  /** Every detected region, whether or not an entity came out of it. */
+  ocrRegions?: OcrRegion[];
+  quality?: OcrQuality | null;
   /** The page was below the resolution at which text can be resolved. Null when the source
    *  was not an image. More actionable than "nothing found", so the failure screen prefers it. */
   tooSmall?: boolean | null;

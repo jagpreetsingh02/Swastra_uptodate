@@ -28,9 +28,10 @@
  * evidence of correctness, but they must not look the same.
  */
 import { useState } from 'react';
-import { ApiError, api, type ExtractedItem } from '../shared/api';
+import { ApiError, api, type ExtractedItem, type OcrQuality, type OcrRegion } from '../shared/api';
 import { Icon } from '../shared/Icon';
 import { SourceCrop } from './SourceCrop';
+import { DocumentRegions, RegionDetail } from './DocumentRegions';
 
 interface Props {
   sessionRef: string;
@@ -39,6 +40,10 @@ interface Props {
   /** prescription | lab_report | discharge_summary | other, from what was found on it. */
   kind: string;
   items: ExtractedItem[];
+  /** Every region OCR detected, whether or not an entity came out of it. Optional so a
+   *  document read by an engine that does not segment renders exactly as it did before. */
+  regions?: OcrRegion[];
+  quality?: OcrQuality | null;
   onDone: () => void;
 }
 
@@ -58,6 +63,8 @@ export function DocumentReview({
   sessionRef,
   documentId,
   filename,
+  regions = [],
+  quality = null,
   kind,
   items,
   onDone,
@@ -65,6 +72,10 @@ export function DocumentReview({
   const [decided, setDecided] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Which OCR region is highlighted. Set by clicking a box on the page OR by clicking a
+   *  reading in the list — the two are the same selection, which is what makes the link
+   *  legible in both directions. */
+  const [selectedRegionId, setSelectedRegionId] = useState<number | null>(null);
   /** itemId -> the text the patient is typing, while a row is being corrected. */
   const [editing, setEditing] = useState<Record<string, string>>({});
 
@@ -116,6 +127,7 @@ export function DocumentReview({
   }
 
   const pending = checkable.filter((item) => item.pending && !decided[item.itemId]);
+  const selectedRegion = regions.find((region) => region.regionId === selectedRegionId) ?? null;
 
   return (
     <div className="kiosk-panel">
@@ -127,6 +139,34 @@ export function DocumentReview({
 
       {error && <div className="kiosk-error">{error}</div>}
 
+      {/* WHAT WAS FOUND, AS COUNTS. A page that is partly readable is the normal outcome on
+          handwriting, and saying so beats both "success" and "we could not read that". */}
+      {quality && quality.regionsDetected > 0 && (
+        <p className="ocr-summary">
+          {quality.regionsDetected} lines of handwriting found ·{' '}
+          <strong>{quality.regionsRecognised}</strong> read clearly ·{' '}
+          <strong>{quality.regionsNeedingReview}</strong> need checking
+          {quality.regionsUnreadable > 0 && (
+            <>
+              {' '}
+              · <strong>{quality.regionsUnreadable}</strong> could not be read
+            </>
+          )}
+        </p>
+      )}
+
+      {regions.length > 0 && (
+        <div className="ocr-evidence">
+          <DocumentRegions
+            pageUrl={api.sessionDocumentFileUrl(sessionRef, documentId, 1)}
+            regions={regions}
+            selectedRegionId={selectedRegionId}
+            onSelect={(region) => setSelectedRegionId(region?.regionId ?? null)}
+          />
+          {selectedRegion && <RegionDetail region={selectedRegion} />}
+        </div>
+      )}
+
       <div className="extract-list">
         {checkable.map((item) => {
           const outcome = decided[item.itemId];
@@ -137,8 +177,17 @@ export function DocumentReview({
               key={item.itemId}
               className={`extract-item extract-item--${certainty.tone}${
                 outcome ? ` decided ${outcome}` : ''
-              }`}
+              }${item.regionId != null && item.regionId === selectedRegionId ? ' is-linked' : ''}`}
               data-certainty={certainty.tone}
+              // Selecting a reading highlights the exact strip of the page it was read from
+              // and scrolls it into view. The reverse — clicking a box — is handled by the
+              // map above; both write the same piece of state.
+              onMouseEnter={() =>
+                item.regionId != null && setSelectedRegionId(item.regionId)
+              }
+              onFocusCapture={() =>
+                item.regionId != null && setSelectedRegionId(item.regionId)
+              }
             >
               {/* The patch of their own paper this came from. It is what turns "do you
                   remember?" into "do these match?", which is a question a patient can

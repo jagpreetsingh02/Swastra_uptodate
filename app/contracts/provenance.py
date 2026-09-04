@@ -134,6 +134,20 @@ class DocumentSpan(_Span):
     ocr_backend: str
     #: Handwriting goes to the low-confidence lane and is never silently merged (Module B).
     handwritten: bool = False
+    #: FALSE means `ocr_confidence` is a placeholder, not a measurement — the recogniser
+    #: exposed no trustworthy score for this region. Additive and defaulted, so every existing
+    #: span keeps its meaning: the contract is unchanged, it can now just also say "unknown".
+    #:
+    #: `ocr_confidence` stays a required float in [0,1] rather than becoming optional. A
+    #: provenance field that may be absent is one every reader has to branch on, and the
+    #: honest reading of an unmeasured span is "assume the worst and send it to a human",
+    #: which 0.0 already encodes. The flag is what stops a UI printing that 0.0 as if it were
+    #: measured certainty.
+    confidence_measured: bool = True
+    #: Which detected OCR region this span came from, when the engine segmented the page.
+    #: This is what lets a physician click an extracted medicine and have the exact strip of
+    #: the prescription highlighted, instead of the box being re-derived downstream.
+    region_id: int | None = None
     #: What a *named human* read the span as, when OCR got it wrong. The scrawl stays in
     #: `verbatim`; this is the reading, and the two sit side by side in the evidence drawer.
     #:

@@ -1279,3 +1279,240 @@
 .camera--unavailable .kiosk-title {
   margin-bottom: var(--mk-space-3);
 }
+
+/* ====================================================== OCR evidence map ===
+ * The uploaded page with the OCR's own boxes on it. See `DocumentRegions.tsx` for why the
+ * boxes come from the backend's regions rather than from anything drawn here.
+ *
+ * Every colour is a token. The three region states reuse the product's existing semantic
+ * pairs so a box means the same thing as the badge beside it: accent for read, caution for
+ * needs-checking, danger for unreadable.
+ */
+
+.ocr-summary {
+  font-size: var(--mk-text-sm);
+  color: var(--mk-ink-muted);
+  margin-bottom: var(--mk-space-4);
+}
+
+.ocr-summary strong {
+  color: var(--mk-ink-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.ocr-evidence {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--mk-space-5);
+  margin-bottom: var(--mk-space-6);
+  align-items: start;
+}
+
+.ocr-map {
+  margin: 0;
+}
+
+.ocr-map__frame {
+  position: relative;
+  border: 1px solid var(--mk-line);
+  border-radius: var(--mk-radius-md);
+  overflow: hidden;
+  background: var(--mk-surface-sunken);
+  /* The page can be tall; cap it and let the reader scroll rather than pushing the list of
+     medicines off the bottom of a kiosk screen. */
+  max-height: 62vh;
+  overflow-y: auto;
+}
+
+.ocr-map__page {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.ocr-map__placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  padding: var(--mk-space-6);
+  font-size: var(--mk-text-sm);
+  color: var(--mk-ink-subtle);
+  text-align: center;
+}
+
+/* Sized in percentages over the image, so it tracks at every width with no measurement in
+   JavaScript — the same reason `SourceCrop` uses background-position rather than margins. */
+.ocr-map__overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ocr-box {
+  position: absolute;
+  pointer-events: auto;
+  padding: 0;
+  background: transparent;
+  border: 2px solid var(--mk-accent-edge);
+  border-radius: 2px;
+  cursor: pointer;
+  transition:
+    background var(--mk-dur-fast) var(--mk-ease-out),
+    box-shadow var(--mk-dur-fast) var(--mk-ease-out);
+}
+
+.ocr-box:hover,
+.ocr-box.is-active {
+  background: var(--mk-accent-soft);
+  box-shadow: var(--mk-shadow-focus);
+}
+
+/* Three states, three treatments. They are three different claims about the page. */
+.ocr-box--verify {
+  border-color: var(--mk-warm-edge);
+}
+
+.ocr-box--verify:hover,
+.ocr-box--verify.is-active {
+  background: var(--mk-warm-soft);
+}
+
+.ocr-box--unreadable {
+  border-color: var(--mk-danger-edge);
+  border-style: dashed;
+}
+
+.ocr-box--unreadable:hover,
+.ocr-box--unreadable.is-active {
+  background: var(--mk-danger-soft);
+}
+
+.ocr-box__tag {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  transform: translateY(-100%);
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: var(--mk-weight-bold);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  color: var(--mk-accent-contrast);
+  background: var(--mk-accent);
+  border-radius: 2px 2px 0 0;
+}
+
+.ocr-box--verify .ocr-box__tag {
+  background: var(--mk-warm);
+}
+
+.ocr-box--unreadable .ocr-box__tag {
+  background: var(--mk-danger);
+}
+
+.ocr-map__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mk-space-3);
+  margin-top: var(--mk-space-3);
+  font-size: var(--mk-text-xs);
+}
+
+.ocr-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mk-ink-muted);
+}
+
+.ocr-key::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 2px solid var(--mk-accent-edge);
+}
+
+.ocr-key--verify::before {
+  border-color: var(--mk-warm-edge);
+}
+
+.ocr-key--unreadable::before {
+  border-color: var(--mk-danger-edge);
+  border-style: dashed;
+}
+
+/* --------------------------------------------------------- region detail --- */
+
+.ocr-detail {
+  padding: var(--mk-space-4);
+  border: 1px solid var(--mk-line);
+  border-radius: var(--mk-radius-md);
+  background: var(--mk-surface-raised);
+}
+
+.ocr-detail--verify {
+  border-color: var(--mk-warm-edge);
+}
+
+.ocr-detail--unreadable {
+  border-color: var(--mk-danger-edge);
+}
+
+.ocr-detail__head {
+  font-size: var(--mk-text-2xs);
+  font-weight: var(--mk-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--mk-ink-subtle);
+  margin-bottom: var(--mk-space-2);
+}
+
+/* The transcription is monospaced and quoted so it reads as a QUOTATION of the page rather
+   than as the product's own words. It is the one string here nothing has edited. */
+.ocr-detail__text {
+  font-family: var(--mk-font-mono);
+  font-size: var(--mk-text-sm);
+  line-height: var(--mk-leading-relaxed);
+  color: var(--mk-ink);
+  margin: 0 0 var(--mk-space-4);
+  overflow-wrap: anywhere;
+}
+
+.ocr-detail__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mk-space-3);
+  margin: 0;
+}
+
+.ocr-detail__meta dt {
+  font-size: var(--mk-text-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mk-ink-subtle);
+}
+
+.ocr-detail__meta dd {
+  margin: 0;
+  font-size: var(--mk-text-sm);
+  color: var(--mk-ink-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.ocr-detail__links {
+  margin: var(--mk-space-4) 0 0;
+  font-size: var(--mk-text-xs);
+  color: var(--mk-ink-muted);
+}
+
+/* A reading whose region is currently highlighted on the page above. */
+.extract-item.is-linked {
+  box-shadow: var(--mk-shadow-focus);
+}
+
+@media (max-width: 900px) {
+  .ocr-evidence {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

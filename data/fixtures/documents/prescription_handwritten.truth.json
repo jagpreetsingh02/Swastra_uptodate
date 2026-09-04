@@ -1,0 +1,48 @@
+{
+  "medications": [
+    {
+      "name": "Ivermectin",
+      "dose": "12mg",
+      "frequency": "OD",
+      "duration": "3d"
+    },
+    {
+      "name": "Augmentin",
+      "dose": "625mg",
+      "frequency": "BD",
+      "duration": "5d"
+    },
+    {
+      "name": "Omeprazole",
+      "dose": "20mg",
+      "frequency": "OD",
+      "timing": "bf"
+    },
+    {
+      "name": "Paracetamol",
+      "dose": "250mg",
+      "frequency": "SOS"
+    },
+    {
+      "name": "Metformin",
+      "dose": "500mg",
+      "frequency": "TDS",
+      "timing": "after food"
+    }
+  ],
+  "investigations": [],
+  "diagnoses": [],
+  "written_lines": [
+    "Dr S. Menon   MBBS MD",
+    "City Clinic, Chennai",
+    "Date 04/09/2026",
+    "Rx",
+    "Tab Ivermectin-12mg  OD  x 3d",
+    "Tab Augmentin 625mg  BD  x 5d",
+    "Cap Omeprazole 20mg  OD  bf",
+    "Syrup Paracetamol 250mg  SOS",
+    "Tab Metformin 500mg  TDS  after food",
+    "Review after 5 days"
+  ],
+  "note": "Synthetic handwriting: real handwriting face, per-character rotation and jitter, baseline drift, variable pen pressure, page skew, illumination gradient, sensor noise. No real doctor, no real patient, no real registration number."
+}

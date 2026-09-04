@@ -57,6 +57,17 @@ export function DocumentUpload({
       // The file was read, but nothing printed was found on it. That is not an error — it is
       // the normal outcome for a handwritten note — and it gets the state that says so
       // rather than a success screen with an empty list on it.
+      // PARTIAL SUCCESS IS NOT FAILURE. A handwritten page routinely yields regions that were
+      // read but produced no structured entity — a header, an advice line, a drug the rules
+      // could not parse. Those still go to the review screen, boxed, because the doctor can
+      // read them even when the extractor could not. Only a page with NOTHING on it at all
+      // reaches the failure screen.
+      const detected = result.quality?.regionsDetected ?? 0;
+      if (!result.extracted?.length && detected > 0) {
+        setReviewing(result);
+        return;
+      }
+
       if (!result.extracted?.length) {
         // Both cases produce an empty extraction, and they need different advice: "stand
         // closer" versus "this page has no printed writing on it". Under-resolution is the
@@ -150,6 +161,8 @@ export function DocumentUpload({
         filename={reviewing.filename}
         kind={reviewing.documentKind}
         items={reviewing.extracted}
+        regions={reviewing.ocrRegions ?? []}
+        quality={reviewing.quality ?? null}
         onDone={() => setReviewing(null)}
       />
     );

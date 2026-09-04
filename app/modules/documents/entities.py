@@ -38,6 +38,14 @@ class ExtractedEntity:
     handwritten: bool
     #: The exact OCR line this came from. Becomes the DocumentSpan verbatim.
     source_text: str
+    #: WHICH DETECTED REGION PRODUCED THIS. Carried so the physician screen can highlight the
+    #: exact strip of paper a medicine was read from, rather than re-deriving a box from
+    #: coordinates and hoping the two still agree. `None` for engines that do not segment
+    #: (the text layer, and Tesseract's own whole-page blocks).
+    region_id: int | None = None
+    #: False when the recogniser exposed no trustworthy score. `confidence` is then a
+    #: placeholder, and the API reports `confidence: null`.
+    confidence_measured: bool = True
     detail: dict[str, Any] = field(default_factory=dict)
     observed_on: date | None = None
     date_precision: str = "unknown"
@@ -51,6 +59,8 @@ class ExtractedEntity:
             "confidence": round(self.confidence, 4),
             "handwritten": self.handwritten,
             "sourceText": self.source_text,
+            "regionId": self.region_id,
+            "confidenceMeasured": self.confidence_measured,
             "detail": self.detail,
             "observedOn": self.observed_on.isoformat() if self.observed_on else None,
             "datePrecision": self.date_precision,
@@ -62,7 +72,13 @@ class ExtractedEntity:
 # Indian prescription conventions specifically: 1-0-1 dosing notation, TAB/CAP/SYP prefixes,
 # OD/BD/TDS/QID/HS/SOS frequencies. A parser built for US prescriptions reads none of these.
 
-_FORM = r"(?:TAB|CAP|SYP|INJ|OINT|DROPS?|POWDER|SUSP|CREAM)\.?"
+# Spelled-out forms as well as the abbreviations. A prescription that says "Syrup" rather than
+# "SYP" was otherwise read as a medicine called "Syrup Paracetamol" — the form became part of
+# the drug name, which is wrong in the record and wrong on the patient's read-back screen.
+_FORM = (
+    r"(?:TABS?|TABLETS?|CAPS?|CAPSULES?|SYP|SYRUPS?|INJ|INJECTIONS?|OINT|OINTMENTS?"
+    r"|DROPS?|POWDERS?|SUSP|SUSPENSIONS?|CREAMS?|GEL|LOTION|SACHETS?)\.?"
+)
 _STRENGTH = r"\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|iu|units?|%)"
 # Word boundaries are load-bearing: without them the OD in AMLODIPINE reads as a frequency
 # and the drug name is truncated to "AML".
@@ -74,7 +90,10 @@ MEDICATION_LINE = re.compile(
     rf"(?P<name>[A-Za-z][A-Za-z0-9\-/'\s]{{2,40}}?)\s*"
     rf"(?P<strength>{_STRENGTH})?\s*"
     rf"(?P<freq>{_FREQ_NUMERIC}|{_FREQ_WORD})"
-    rf"(?:\s*(?:x|for)\s*(?P<duration>\d+\s*(?:days?|weeks?|months?)))?",
+    # Abbreviated durations too — `x 5d`, `x 2w`, `x 1m`. This is READING what is written,
+    # not inferring it: a prescription that says "x 5d" has stated its duration, and dropping
+    # it because it was not spelled "days" loses a field the doctor wrote down.
+    rf"(?:\s*(?:x|X|×|for)\s*(?P<duration>\d+\s*(?:days?|weeks?|months?|d|w|m)\b))?",
     re.IGNORECASE,
 )
 
@@ -206,6 +225,36 @@ def _normalise_frequency(raw: str) -> str:
     }.get(cleaned, raw.strip())
 
 
+#: When to take it relative to food or the day. Kept apart from frequency because a line
+#: routinely carries both ("BD bf" is twice daily AND before food) and one field loses one of
+#: them. Matched only as whole words — `bf` inside a drug name is not an instruction.
+_TIMING_WORDS: tuple[tuple[str, str], ...] = (
+    (r"\bbefore\s+food\b", "before food"),
+    (r"\bafter\s+food\b", "after food"),
+    (r"\bbefore\s+meals?\b", "before meals"),
+    (r"\bafter\s+meals?\b", "after meals"),
+    (r"\bempty\s+stomach\b", "on an empty stomach"),
+    (r"\bbf\b", "before food"),
+    (r"\baf\b", "after food"),
+    (r"\ba\.?c\.?\b", "before meals"),
+    (r"\bp\.?c\.?\b", "after meals"),
+    (r"\bh\.?s\.?\b", "at bedtime"),
+)
+
+
+def _timing_from(text: str) -> str | None:
+    """The food/time-of-day instruction written on the line, or nothing.
+
+    Returns `None` rather than a default. A prescription that does not say when to take a
+    medicine has not said it, and filling that in would be inventing a clinical instruction —
+    which is the one thing this extractor must never do.
+    """
+    for pattern, reading in _TIMING_WORDS:
+        if re.search(pattern, text, re.IGNORECASE):
+            return reading
+    return None
+
+
 def _route_from(text: str) -> str | None:
     lowered = text.casefold()
     for cue, route in _ROUTE_WORDS.items():
@@ -234,6 +283,8 @@ def extract_from_block(
             confidence=block.confidence,
             handwritten=block.handwritten,
             source_text=text,
+            region_id=block.region_id,
+            confidence_measured=block.confidence_measured,
             detail=detail,
             observed_on=observed,
             date_precision=precision,
@@ -299,6 +350,7 @@ def extract_from_block(
                         "frequency": _normalise_frequency(medication.group("freq") or ""),
                         "duration": medication.group("duration"),
                         "route": _route_from(text),
+                        "timing": _timing_from(text),
                     },
                 )
             )
@@ -359,7 +411,12 @@ def extract_entities(
                     entity.detail["dateSourceLine"] = header_line
                 elif entity.observed_on is not None:
                     entity.detail["dateSource"] = "own_line"
-                if entity.handwritten or entity.confidence <= settings.ocr_low_confidence_threshold:
+                unmeasured = not entity.confidence_measured
+                if (
+                    entity.handwritten
+                    or unmeasured
+                    or entity.confidence <= settings.ocr_low_confidence_threshold
+                ):
                     needs_check.append(entity)
                 else:
                     confident.append(entity)

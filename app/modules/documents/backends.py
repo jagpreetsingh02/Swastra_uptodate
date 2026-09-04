@@ -42,6 +42,74 @@ class OCRBlock:
     #: True when the block came from a handwriting-shaped region. Routed to the
     #: low-confidence lane and never auto-merged into the record.
     handwritten: bool = False
+    #: Stable identity for this region within one read, in reading order. An extracted entity
+    #: stores it so the physician screen can highlight the exact strip of paper the medicine
+    #: came from, rather than re-deriving a box from coordinates and hoping they still match.
+    region_id: int | None = None
+    #: FALSE MEANS THE CONFIDENCE IS NOT KNOWN, and `confidence` is then a placeholder rather
+    #: than a measurement. Kept as a separate flag rather than making `confidence` optional
+    #: because `DocumentSpan.ocr_confidence` is a required float in [0,1] and loosening a
+    #: provenance contract to carry a display concern is the wrong trade. The API renders
+    #: `confidence: null` when this is false; nothing renders 0.0 as if it were measured.
+    confidence_measured: bool = True
+    #: Pixel size of the crop that was actually recognised, on the prepared page. This is what
+    #: makes "was this region big enough to read?" answerable per line instead of per page.
+    crop_width: int | None = None
+    crop_height: int | None = None
+    #: Which engine produced this text. With three backends and a fallback chain between them,
+    #: "what read this line" is a question the evidence drawer has to be able to answer.
+    engine: str = ""
+    #: Set when the region was attempted and produced nothing usable. The box survives anyway:
+    #: an unreadable line is evidence that there is writing there nobody has read.
+    failure: str | None = None
+
+    @property
+    def reported_confidence(self) -> float | None:
+        """What the API should show. `None` when unmeasured — never a stand-in number."""
+        return self.confidence if self.confidence_measured else None
+
+
+@dataclass(frozen=True, slots=True)
+class QualityReport:
+    """What was found on the page, as counts rather than as a single verdict.
+
+    THE POINT OF THIS TYPE. The upload screen used to choose between two sentences — "the
+    photo is too small to read" and "we could not find any printed writing" — from one boolean
+    and an empty list. Both are whole-document verdicts, and a handwritten prescription is
+    almost never wholly readable or wholly not: it is nine lines of which seven read cleanly,
+    one is uncertain and one is a scrawl. Reporting that as a total failure throws away the
+    seven, and reporting it as a success hides the two.
+
+    So the page reports counts, the screen can say "some handwriting needs review", and the
+    doctor still gets everything that was legible.
+    """
+
+    regions_detected: int = 0
+    regions_recognised: int = 0
+    regions_needing_review: int = 0
+    regions_unreadable: int = 0
+    #: The long edge of the ORIGINAL upload, before any resizing for a model's input. This is
+    #: the number a resolution judgement must be made against.
+    original_long_edge: int | None = None
+    under_resolution: bool = False
+    #: Median detected line height in prepared-page pixels — the honest per-line answer to
+    #: "is there enough detail here to read?", which a page-level pixel count cannot give.
+    median_line_height: int | None = None
+
+    @property
+    def any_usable(self) -> bool:
+        return self.regions_recognised > 0
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "regionsDetected": self.regions_detected,
+            "regionsRecognised": self.regions_recognised,
+            "regionsNeedingReview": self.regions_needing_review,
+            "regionsUnreadable": self.regions_unreadable,
+            "originalLongEdge": self.original_long_edge,
+            "underResolution": self.under_resolution,
+            "medianLineHeight": self.median_line_height,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +125,9 @@ class OCRPage:
 
     @property
     def mean_confidence(self) -> float:
-        scored = [b.confidence for b in self.blocks if b.text.strip()]
+        scored = [
+            b.confidence for b in self.blocks if b.text.strip() and b.confidence_measured
+        ]
         return sum(scored) / len(scored) if scored else 0.0
 
 
@@ -70,9 +140,19 @@ class OCRResult:
     #: "we could not read that paper" — and so a physician can see that a source image was
     #: rotated or deskewed before the text they are reading was extracted from it.
     preparation: imaging.Prepared | None = None
+    #: Per-page counts, so the caller can report partial success instead of a single verdict.
+    quality: QualityReport | None = None
+
+    @property
+    def blocks(self) -> tuple[OCRBlock, ...]:
+        """Every block across every page, in reading order."""
+        return tuple(block for page in self.pages for block in page.blocks)
 
     @property
     def mean_confidence(self) -> float:
+        # Unmeasured blocks are EXCLUDED rather than counted as zero. A page read by an engine
+        # that exposes no scores would otherwise report a mean confidence of 0.0, which reads
+        # as "certainly wrong" when the truth is "not known".
         scored = [p.mean_confidence for p in self.pages if p.blocks]
         return sum(scored) / len(scored) if scored else 0.0
 
@@ -477,7 +557,170 @@ def _normalise(raw: tuple[int, int, int, int], page_w: int, page_h: int) -> Boun
     )
 
 
-_BACKENDS: dict[str, type] = {"textlayer": TextLayerOCR, "tesseract": TesseractOCR}
+
+
+# ---------------------------------------------------------------- handwriting
+
+
+class HandwritingOCR:
+    """A handwritten prescription, one detected line at a time.
+
+    The only backend here that reads handwriting, and the only one that segments before it
+    recognises. See `handwriting.py` for why the recognizer is never shown a whole page, and
+    `segmentation.py` for how the lines are found.
+
+    It is `available` only when torch and transformers are importable AND the master switch is
+    on. Everything past that point which can go wrong — a gated download, an inference error,
+    a page with no detectable lines — raises `UpstreamUnavailable`, and `read_document()`
+    falls through to Tesseract exactly as it already does for every other engine.
+    """
+
+    name = "handwriting"
+
+    #: A region the recognizer scored below this is shown, kept, boxed — and never merged
+    #: without a person. Matched to the product's existing low-confidence threshold rather
+    #: than invented here, so the handwriting lane and the printed lane agree on what "needs
+    #: a human" means.
+    @property
+    def review_threshold(self) -> float:
+        from app.core.config import settings as _settings
+
+        return _settings.ocr_low_confidence_threshold
+
+    def __init__(self) -> None:
+        from app.core.config import settings as _settings
+        from app.modules.documents import handwriting
+
+        self.available = (
+            _settings.handwriting_ocr_enabled and handwriting.dependencies_available()
+        )
+
+    def read(self, data: bytes, *, filename: str, media_type: str) -> OCRResult:
+        from app.modules.documents import handwriting
+
+        if not self.available:
+            raise UpstreamUnavailable(
+                "Handwriting recognition is not installed on this kiosk."
+            )
+        if media_type == "application/pdf" or filename.lower().endswith(".pdf"):
+            # A PDF is rasterised by the printed lane, which then hands each page back here if
+            # it turns out to be handwritten. Refusing rather than duplicating that machinery.
+            raise UnsupportedMedia(
+                f"{self.name} reads photographs, not {media_type!r}.",
+                reason="unsupported_type",
+            )
+        return self.read_prepared(
+            imaging.prepare(data, filename=filename),
+            recognizer=handwriting.default_recognizer(),
+        )
+
+    def read_prepared(self, prepared: imaging.Prepared, *, recognizer: object) -> OCRResult:
+        """The whole lane, with the recognizer injected.
+
+        Split out from `read()` so the pipeline can be exercised end to end against a
+        deterministic stand-in — the gated weights are not available in CI, and the part that
+        was broken was never the model anyway. `tests/test_handwriting_regions.py` drives this.
+        """
+        from app.modules.documents import handwriting, segmentation
+
+        regions = segmentation.find_regions(prepared)
+        if not regions:
+            # No detectable writing. This is the ONE whole-page failure this lane allows, and
+            # it is a routing decision rather than a verdict on the document: Tesseract may
+            # still find printed text the segmenter did not see as handwriting.
+            raise UpstreamUnavailable(
+                "No handwritten lines could be detected on this page."
+            )
+
+        readings = handwriting.read_regions(prepared, regions, recognizer)  # type: ignore[arg-type]
+        engine = getattr(recognizer, "name", self.name)
+
+        blocks: list[OCRBlock] = []
+        recognised = review = unreadable = 0
+        for reading in readings:
+            region = reading.region
+            crop = region.crop(prepared)
+            # `confidence` is the float that reaches `DocumentSpan`; `measured` is what says
+            # whether that float means anything. An unmeasured region carries 0.0 and is
+            # reported as null — see OCRBlock.confidence_measured for why it is not Optional.
+            measured = reading.confidence is not None
+            confidence: float = reading.confidence if reading.confidence is not None else 0.0
+            if not reading.usable:
+                unreadable += 1
+            elif not measured or confidence <= self.review_threshold:
+                review += 1
+            else:
+                recognised += 1
+            blocks.append(
+                OCRBlock(
+                    text=reading.text,
+                    bbox=region.bbox,
+                    confidence=confidence,
+                    # EVERY handwritten block is flagged handwritten, whatever it scored.
+                    # This is what keeps the lane structural: the record cannot receive a
+                    # handwritten reading without a person, and that must not depend on a
+                    # threshold comparison going the right way.
+                    handwritten=True,
+                    region_id=region.index,
+                    confidence_measured=measured,
+                    crop_width=crop.width,
+                    crop_height=crop.height,
+                    engine=engine,
+                    failure=reading.failure,
+                )
+            )
+
+        heights = sorted(region.height for region in regions)
+        quality = QualityReport(
+            regions_detected=len(regions),
+            # A region that read AND scored above the review bar. Everything else is counted
+            # honestly in one of the other two buckets rather than rounded up to success.
+            regions_recognised=recognised,
+            regions_needing_review=review,
+            regions_unreadable=unreadable,
+            original_long_edge=max(prepared.geometry.original_size),
+            under_resolution=prepared.too_small,
+            median_line_height=heights[len(heights) // 2] if heights else None,
+        )
+        log.info(
+            "ocr.handwriting_page",
+            engine=engine,
+            detected=quality.regions_detected,
+            recognised=quality.regions_recognised,
+            review=quality.regions_needing_review,
+            unreadable=quality.regions_unreadable,
+            median_line_px=quality.median_line_height,
+        )
+
+        if not quality.any_usable and unreadable == len(regions):
+            # Lines were found and none of them could be read. Tesseract gets a turn before
+            # the patient is told anything.
+            raise UpstreamUnavailable(
+                f"All {len(regions)} detected handwriting regions were unreadable."
+            )
+
+        return OCRResult(
+            backend=self.name,
+            pages=(
+                OCRPage(
+                    page=1,
+                    blocks=tuple(blocks),
+                    width=prepared.width,
+                    height=prepared.height,
+                ),
+            ),
+            preparation=prepared,
+            quality=quality,
+        )
+
+
+#: The registry. Declared AFTER every backend class, so adding one is a single edit here
+#: rather than a forward reference that only fails at import time.
+_BACKENDS: dict[str, type] = {
+    "textlayer": TextLayerOCR,
+    "tesseract": TesseractOCR,
+    "handwriting": HandwritingOCR,
+}
 
 
 
@@ -512,12 +755,21 @@ def backend_for(media_type: str, filename: str, *, requested: str | None = None)
         (".png", ".jpg", ".jpeg", ".webp", ".heic")
     )
     if is_image:
-        tesseract = get_ocr_backend("tesseract")
-        if not tesseract.available:
-            raise UpstreamUnavailable(
-                "This kiosk cannot read photographs at the moment."
-            )
-        return tesseract
+        # A PHOTOGRAPH IS TRIED ON HANDWRITING FIRST. Most photographs taken at this kiosk are
+        # of prescriptions, and a prescription is handwritten more often than not. The
+        # handwriting lane refuses cleanly on a page with no detectable handwritten lines, so
+        # a photograph of a PRINTED report costs one segmentation pass and then falls through
+        # to Tesseract, which is the engine that reads it well.
+        #
+        # The reverse order is what the bug report describes: Tesseract read a handwritten
+        # page, found nothing, and the patient was told the photo was too small.
+        for name in ("handwriting", "tesseract"):
+            engine = get_ocr_backend(name)
+            if engine.available:
+                return engine
+        raise UpstreamUnavailable(
+            "This kiosk cannot read photographs at the moment."
+        )
     return get_ocr_backend("textlayer")
 
 
@@ -531,6 +783,24 @@ def read_document(data: bytes, *, filename: str, media_type: str, requested: str
     backend = backend_for(media_type, filename, requested=requested)
     try:
         return backend.read(data, filename=filename, media_type=media_type)
+    except UpstreamUnavailable as unavailable:
+        # THE HANDWRITING LANE DECLINING IS A ROUTING EVENT, NOT A FAILURE. It raises this for
+        # a page with no detectable handwritten lines, a gated model, or an inference error —
+        # and in every one of those cases Tesseract should still get the page. Without this
+        # arm, adding the handwriting engine in front of Tesseract would have turned every
+        # printed photograph into an error.
+        if requested or backend.name == "tesseract":
+            raise
+        fallback = get_ocr_backend("tesseract")
+        if not fallback.available:
+            raise
+        log.info(
+            "ocr.handwriting_declined",
+            first=backend.name,
+            then=fallback.name,
+            reason=str(unavailable)[:160],
+        )
+        return fallback.read(data, filename=filename, media_type=media_type)
     except UnsupportedMedia as unsupported:
         if requested:
             raise

@@ -109,7 +109,64 @@ class IngestResult:
                 if self.ocr is not None and self.ocr.preparation is not None
                 else None
             ),
+            # THE REGIONS ARE THE EVIDENCE, and they ship whether or not anything was
+            # extracted from them. A page where OCR read nine lines and the entity rules
+            # matched two of them is not an empty result — it is seven lines a doctor can
+            # still look at, boxed, on the page they came from.
+            "ocrRegions": self.ocr_regions(),
+            "quality": (
+                self.ocr.quality.to_dict()
+                if self.ocr is not None and self.ocr.quality is not None
+                else None
+            ),
         }
+
+    def ocr_regions(self) -> list[dict[str, Any]]:
+        """Every detected region, with the text read from it and where it sits on the page.
+
+        This is what the review screen draws its overlay from, and it is deliberately the
+        SAME data the facts were built from rather than a parallel description of it — a
+        frontend-only visualisation would drift from the evidence the moment either changed.
+        """
+        if self.ocr is None:
+            return []
+        # Which entities came from which region, so clicking a box can name the medicines it
+        # produced and clicking a medicine can find its box.
+        by_region: dict[int, list[str]] = {}
+        for position, entity in enumerate(self.entities):
+            if entity.region_id is not None:
+                by_region.setdefault(entity.region_id, []).append(f"recorded:{position}")
+        for raw in self.needs_verification:
+            region_id = raw.get("regionId")
+            if region_id is not None:
+                by_region.setdefault(int(region_id), []).append(
+                    f"pending:{raw['entityIndex']}"
+                )
+
+        regions: list[dict[str, Any]] = []
+        for page in self.ocr.pages:
+            for block in page.blocks:
+                if block.region_id is None:
+                    continue
+                regions.append(
+                    {
+                        "regionId": block.region_id,
+                        "documentId": self.document_id,
+                        "page": page.page,
+                        "bbox": block.bbox.model_dump(),
+                        "text": block.text,
+                        # `null`, never a stand-in number, when the recogniser exposed no
+                        # trustworthy score. See OCRBlock.reported_confidence.
+                        "confidence": block.reported_confidence,
+                        "confidenceBand": region_band(block),
+                        "backend": block.engine or self.backend,
+                        "cropWidth": block.crop_width,
+                        "cropHeight": block.crop_height,
+                        "failure": block.failure,
+                        "itemIds": by_region.get(block.region_id, []),
+                    }
+                )
+        return regions
 
     def document_ref(self) -> DocumentRef:
         return DocumentRef(
@@ -121,6 +178,22 @@ class IngestResult:
             low_confidence_pages=sorted({int(e["page"]) for e in self.needs_verification}),
             uploaded_at=datetime.now(UTC),
         )
+
+
+def region_band(block: Any) -> str:
+    """Three states a region can be in, and they are three different claims.
+
+    `unreadable` is not `verify` with a lower number: one says "there is writing here and
+    nobody has read it", the other says "here is a reading, check it". Collapsing them tells a
+    doctor the page held less than it does.
+    """
+    if block.failure is not None or not block.text.strip():
+        return "unreadable"
+    if not block.confidence_measured:
+        # Not measured is not the same as low. It still needs a human, and it must not render
+        # as 0%.
+        return "verify"
+    return confidence_band(block.confidence, block.handwritten)
 
 
 def confidence_band(confidence: float, handwritten: bool) -> str:
@@ -186,6 +259,8 @@ def _record_entity(
             ocr_confidence=entity.confidence,
             ocr_backend=backend,
             handwritten=entity.handwritten,
+            confidence_measured=entity.confidence_measured,
+            region_id=entity.region_id,
             human_reading=human_reading,
             read_by=read_by,
         )

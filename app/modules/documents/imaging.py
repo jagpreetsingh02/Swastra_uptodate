@@ -71,6 +71,7 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
+from app.contracts.provenance import BoundingBox
 from app.core.errors import ValidationError
 from app.core.logging import get_logger
 
@@ -100,6 +101,127 @@ THRESHOLD_BIAS = 10
 
 
 @dataclass(frozen=True)
+class PageGeometry:
+    """Every geometric step `prepare()` took, and the arithmetic to undo them.
+
+    THE PROBLEM THIS SOLVES. A bounding box measured on the prepared page is measured on an
+    image that has been EXIF-rotated, downscaled and rotated-with-expand. Those three
+    together can change both the size and the origin of the canvas — a 3024x4276 photo
+    deskewed by 2 degrees comes out 2417x2497 with the content shifted. A box that is correct
+    against the prepared page is therefore NOT correct against the file the patient uploaded,
+    and anything that draws it over the original lands it on blank paper.
+
+    The product's own convention (see `SourceCrop.tsx`) is that a bbox is normalised against
+    the PREPARED page, and `render.py` serves that same prepared page so the two always
+    agree. That convention is kept — inventing a second coordinate system is how the two
+    silently drift. What this adds is the *inverse*, so a region can also be located on the
+    original when something needs to: an export, a native-resolution crop, or a caller that
+    only has the uploaded bytes.
+
+    `to_original()` is exercised by a round-trip test that marks a known spot on a synthetic
+    page, runs the real `prepare()`, and asserts the mapped-back box lands back on the mark.
+    The rotation sign convention below was settled by that test rather than by reading
+    Pillow's documentation, because the two disagree about which way is positive.
+    """
+
+    #: The uploaded file's pixel size, before anything was done to it.
+    original_size: tuple[int, int]
+    #: Size after EXIF transpose — swapped from `original_size` on a 90/270 rotation.
+    upright_size: tuple[int, int]
+    #: The EXIF orientation tag that was applied, if any.
+    exif_orientation: int | None
+    #: Uniform downscale factor applied after EXIF, 1.0 when the page was already small
+    #: enough. Never below 1.0 in the other direction — this module refuses to upscale.
+    scale: float
+    #: Size handed to `rotate()`, i.e. after EXIF and scaling.
+    scaled_size: tuple[int, int]
+    #: Degrees passed to `Image.rotate`, positive anticlockwise. Zero when deskew was skipped.
+    deskew_degrees: float
+    #: Final canvas, after `rotate(..., expand=True)` grew it.
+    prepared_size: tuple[int, int]
+
+    def to_original(self, bbox: BoundingBox) -> BoundingBox:
+        """A prepared-page box, mapped back to normalised coordinates on the uploaded file.
+
+        Undoes the chain in reverse: expand-rotation, then scale, then EXIF. All four corners
+        are mapped and re-bounded rather than just the origin, because a rotated rectangle is
+        not a rectangle and the axis-aligned box that contains it is the only honest answer.
+        """
+        pw, ph = self.prepared_size
+        corners = [
+            (bbox.x * pw, bbox.y * ph),
+            ((bbox.x + bbox.width) * pw, bbox.y * ph),
+            (bbox.x * pw, (bbox.y + bbox.height) * ph),
+            ((bbox.x + bbox.width) * pw, (bbox.y + bbox.height) * ph),
+        ]
+        mapped = [self._prepared_point_to_original(x, y) for x, y in corners]
+        xs = [point[0] for point in mapped]
+        ys = [point[1] for point in mapped]
+        ow, oh = self.original_size
+        left, right = max(min(xs), 0.0), min(max(xs), float(ow))
+        top, bottom = max(min(ys), 0.0), min(max(ys), float(oh))
+        return BoundingBox(
+            x=round(left / ow, 6),
+            y=round(top / oh, 6),
+            # A degenerate box would fail BoundingBox's `gt=0`, and a region mapped entirely
+            # off the page is a bug worth surfacing as a visible sliver rather than a crash.
+            width=round(max(right - left, 1.0) / ow, 6),
+            height=round(max(bottom - top, 1.0) / oh, 6),
+        )
+
+    def _prepared_point_to_original(self, x: float, y: float) -> tuple[float, float]:
+        # --- undo rotate(expand=True) ---
+        theta = math.radians(self.deskew_degrees)
+        cos_t, sin_t = math.cos(theta), math.sin(theta)
+        pw, ph = self.prepared_size
+        sw, sh = self.scaled_size
+        dx, dy = x - pw / 2.0, y - ph / 2.0
+        # Pillow rotates anticlockwise in a y-down raster, which makes the forward map
+        # [[cos, sin], [-sin, cos]]; this is its inverse.
+        ux = dx * cos_t - dy * sin_t + sw / 2.0
+        uy = dx * sin_t + dy * cos_t + sh / 2.0
+
+        # --- undo the uniform downscale ---
+        if self.scale not in (0, 1.0):
+            ux /= self.scale
+            uy /= self.scale
+
+        # --- undo EXIF transpose ---
+        return self._undo_exif(ux, uy)
+
+    def _undo_exif(self, x: float, y: float) -> tuple[float, float]:
+        """Map a point on the upright image back onto the file's own pixel grid.
+
+        Only the four rotations and the three mirrors EXIF can specify. Orientation 1 (and a
+        missing tag) is the identity, which is the overwhelmingly common case.
+        """
+        orientation = self.exif_orientation
+        if orientation in (None, 1):
+            return x, y
+        uw, uh = self.upright_size
+        if orientation == 2:  # mirrored horizontally
+            return uw - x, y
+        if orientation == 3:  # 180
+            return uw - x, uh - y
+        if orientation == 4:  # mirrored vertically
+            return x, uh - y
+        # The three quarter-turns swap the axes, so the inverse of a coordinate on the
+        # UPRIGHT image is bounded by the upright dimension of the OTHER axis. Getting that
+        # backwards is silent: the arithmetic still returns a number, it is just off the page.
+        # `test_every_exif_orientation_inverts_against_pillow_itself` checks all eight against
+        # `ImageOps.exif_transpose` rather than against this reasoning.
+        if orientation == 5:  # transpose — reflected in the main diagonal
+            return y, x
+        if orientation == 6:  # rotated 90 CW — the common portrait phone capture
+            return y, uw - x
+        if orientation == 7:  # transverse — reflected in the anti-diagonal
+            return uh - y, uw - x
+        if orientation == 8:  # rotated 90 CCW
+            return uh - y, x
+        return x, y
+
+
+@dataclass(frozen=True)
 class Prepared:
     """A page ready for OCR, plus what had to be done to it.
 
@@ -117,6 +239,8 @@ class Prepared:
     scaled_from: tuple[int, int] | None
     too_small: bool
     source_format: str
+    #: The full transform chain, so a region measured here can be located on the upload.
+    geometry: PageGeometry
 
 
 def _register_heif() -> None:
@@ -181,12 +305,15 @@ def prepare(data: bytes, *, filename: str) -> Prepared:
     image = image.convert("L")
 
     # --- 4. Resolution -----------------------------------------------------
+    upright_size = (image.width, image.height)
     long_edge = max(image.width, image.height)
     too_small = long_edge < MIN_LONG_EDGE
     scaled_from: tuple[int, int] | None = None
+    scale = 1.0
     if long_edge > TARGET_LONG_EDGE:
         ratio = TARGET_LONG_EDGE / long_edge
         scaled_from = (image.width, image.height)
+        scale = ratio
         image = image.resize(
             (max(1, round(image.width * ratio)), max(1, round(image.height * ratio))),
             Image.Resampling.LANCZOS,
@@ -198,7 +325,9 @@ def prepare(data: bytes, *, filename: str) -> Prepared:
         log.info("imaging.under_resolution", long_edge=long_edge, minimum=MIN_LONG_EDGE)
 
     # --- 5. Deskew ---------------------------------------------------------
+    scaled_size = (image.width, image.height)
     angle = _estimate_skew(image)
+    applied_angle = angle if abs(angle) >= SKEW_FINE_STEP else 0.0
     if abs(angle) >= SKEW_FINE_STEP:
         # `expand=True` so rotation never pushes text off the canvas — cropping is the one
         # thing this module must never do. White fill because the page is white.
@@ -218,6 +347,18 @@ def prepare(data: bytes, *, filename: str) -> Prepared:
         scaled_from=scaled_from,
         too_small=too_small,
         source_format=source_format,
+        # Recorded from the values actually used, not re-derived afterwards: a geometry that
+        # is reconstructed from the before and after sizes cannot tell a 90-degree EXIF
+        # rotation apart from a portrait crop, and gets the inverse wrong for both.
+        geometry=PageGeometry(
+            original_size=original_size,
+            upright_size=upright_size,
+            exif_orientation=orientation,
+            scale=scale,
+            scaled_size=scaled_size,
+            deskew_degrees=applied_angle,
+            prepared_size=(image.width, image.height),
+        ),
     )
     log.info(
         "imaging.prepared",
@@ -381,6 +522,7 @@ def describe_skew(degrees: float) -> str:
 __all__ = [
     "MIN_LONG_EDGE",
     "TARGET_LONG_EDGE",
+    "PageGeometry",
     "Prepared",
     "decode",
     "describe_skew",

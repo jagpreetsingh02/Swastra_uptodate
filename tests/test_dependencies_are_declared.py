@@ -27,6 +27,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
 REQUIREMENTS = ROOT / "requirements.txt"
+#: Optional extras, each a real requirements file that a deployment may or may not install.
+#: An import satisfied only by one of these is DECLARED — the failure this test exists to
+#: catch is an undeclared import that happens to work because the venv has a leftover, and a
+#: pinned line in `requirements-handwriting.txt` is not that. What it must still catch is the
+#: second half: anything imported at module scope from an extra would crash a kiosk that did
+#: not install it, so `test_optional_extras_are_imported_lazily` below pins that separately.
+OPTIONAL_REQUIREMENTS = tuple(ROOT.glob("requirements-*.txt"))
 
 #: Import name -> distribution name, where they differ.
 ALIASES = {
@@ -51,7 +58,8 @@ OPTIONAL = {"vosk"}
 
 def _declared() -> set[str]:
     names: set[str] = set()
-    for raw in REQUIREMENTS.read_text(encoding="utf-8").splitlines():
+    files = [REQUIREMENTS, *OPTIONAL_REQUIREMENTS]
+    for raw in "\n".join(f.read_text(encoding="utf-8") for f in files).splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
@@ -86,7 +94,9 @@ def test_every_third_party_import_is_declared() -> None:
             continue
         distribution = ALIASES.get(module, module).lower().replace("_", "-")
         if distribution not in declared:
-            missing.append(f"{module} (expected '{distribution}' in requirements.txt)")
+            missing.append(
+                f"{module} (expected '{distribution}' in requirements.txt or an extra)"
+            )
 
     assert not missing, (
         "app/ imports modules that requirements.txt does not declare. They may be present in "
@@ -100,4 +110,36 @@ def test_reportlab_is_declared_specifically() -> None:
     assert "reportlab" in _declared(), (
         "reportlab renders the clinical brief PDF at runtime; without it the container "
         "cannot import app.main at all"
+    )
+
+
+def test_optional_extras_are_imported_lazily() -> None:
+    """Nothing from an optional extra may be imported at module scope.
+
+    This is the other half of the guarantee. Declaring `torch` in
+    `requirements-handwriting.txt` makes the import legal; it does NOT make it safe to run at
+    import time, because a kiosk that installed only `requirements.txt` would then fail to
+    start rather than falling back to Tesseract. `handwriting.py` imports torch and
+    transformers inside the functions that need them, guarded by `dependencies_available()`,
+    and this keeps it that way.
+    """
+    lazy_only = {"torch", "transformers", "torchvision", "tokenizers"}
+    offenders: list[str] = []
+    for path in sorted(APP.rglob("*.py")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if not stripped.startswith(("import ", "from ")):
+                continue
+            # Indented means it is inside a function or a TYPE_CHECKING block, which is the
+            # deferred form this test is asking for.
+            if line[:1].isspace():
+                continue
+            root = stripped.split()[1].split(".")[0]
+            if root in lazy_only:
+                offenders.append(f"{path.relative_to(ROOT)}:{number}  {stripped}")
+
+    assert not offenders, (
+        "an optional heavyweight dependency is imported at module scope. A kiosk that "
+        "installed only requirements.txt would crash on startup instead of falling back:\n  "
+        + "\n  ".join(offenders)
     )
