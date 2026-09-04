@@ -56,6 +56,13 @@ def test_the_misreading_is_high_confidence_not_low() -> None:
     relax it and keep the fixture. If it fails because the confidence dropped below the
     verification threshold, the example has stopped demonstrating the thing it is here for
     and a new one is needed.
+
+    PINNED TO TESSERACT. "AMLODIPINE SMG at 0.94" is Tesseract's own, specific misread of this
+    specific photograph — it is what makes this fixture worth keeping, and it predates the
+    handwriting lane. On default dispatch this fixture (a handheld photo) now tries
+    `khedim/Medical-Prescription-OCR` first, which — per ADR-0017 — answers fluently for any
+    input and never raises, so Tesseract's 5-to-S never runs and this test would silently stop
+    testing the thing it exists to pin.
     """
     from app.core.config import settings
     from app.modules.documents.pipeline import read_and_extract
@@ -64,6 +71,7 @@ def test_the_misreading_is_high_confidence_not_low() -> None:
         FIXTURE.read_bytes(),
         filename=FIXTURE.name,
         media_type="image/jpeg",
+        backend_name="tesseract",
     )
 
     amlodipine = [e for e in [*confident, *needs_check] if "amlodipine" in e.text.lower()]

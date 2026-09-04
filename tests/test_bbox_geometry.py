@@ -94,8 +94,20 @@ def _page_with_word_at(
 def _boxes(data: bytes, filename: str):
     from app.modules.documents.pipeline import read_and_extract
 
+    # PINNED TO TESSERACT, DELIBERATELY. This file tests TESSERACT's own bbox geometry against
+    # synthetic machine-printed fixtures — the three historical bugs named in the module
+    # docstring are all Tesseract/render/crop coordinate bugs, and predate the handwriting lane
+    # entirely.
+    #
+    # Leaving this on default dispatch broke the moment a real handwriting recognizer became
+    # available: `backend_for()` now tries `handwriting` first for any image, and
+    # `khedim/Medical-Prescription-OCR` — verified in ADR-0017 to answer fluently and
+    # confidently for ANY input, including a blank page — never raises `UpstreamUnavailable`
+    # for these clean printed-word fixtures. It "succeeds" with unrelated text, so the
+    # fallback to Tesseract this file actually wants to exercise never fires. Naming the
+    # engine is what these tests were always implicitly asserting; it is now explicit.
     ocr, _confident, _needs = read_and_extract(
-        data, filename=filename, media_type="image/png"
+        data, filename=filename, media_type="image/png", backend_name="tesseract"
     )
     return ocr
 

@@ -215,7 +215,18 @@ def fit_for_model(crop: Image.Image, *, side: int = 384) -> Image.Image:
 
 
 def _khedim_recognizer() -> Recognizer:
-    """The real thing: a batched call into the fine-tune, with confidence from its own scores."""
+    """The real thing: a batched call into the fine-tune, with confidence from its own scores.
+
+    NUM_BEAMS IS NOT OVERRIDDEN TO 1. An earlier version hardcoded greedy decoding here, on the
+    reasoning "reproducible, and the scores mean what they say" — a reasonable default in the
+    abstract, and the wrong one for THIS checkpoint. `khedim/Medical-Prescription-OCR` ships
+    its own `generation_config.json` with `num_beams: 4`, which `from_pretrained()` loads onto
+    `model.generation_config` automatically. Passing `num_beams=1` at call time overrides that
+    and runs the architecture with a decoding strategy it was not tuned or evaluated with —
+    which is not "the actual model", it is a modified one wearing its name. So `generate()` is
+    called with `settings.handwriting_num_beams` only when that is explicitly set (for a fast
+    greedy pass while iterating); left `None`, the checkpoint's own config drives it.
+    """
     processor, model, device = load_model()
 
     class _Khedim:
@@ -224,12 +235,15 @@ def _khedim_recognizer() -> Recognizer:
         def __call__(self, crops: list[Image.Image]) -> list[tuple[str, float | None]]:
             images = [fit_for_model(crop) for crop in crops]
             pixels = processor(images=images, return_tensors="pt").pixel_values.to(device)
+            beam_kwargs: dict[str, int] = {}
+            if settings.handwriting_num_beams is not None:
+                beam_kwargs["num_beams"] = settings.handwriting_num_beams
             generated = model.generate(
                 pixels,
                 max_new_tokens=settings.handwriting_max_new_tokens,
-                num_beams=1,  # greedy: reproducible, and the scores mean what they say
                 output_scores=True,
                 return_dict_in_generate=True,
+                **beam_kwargs,
             )
             texts = processor.batch_decode(generated.sequences, skip_special_tokens=True)
             return list(zip(texts, _confidences(model, generated), strict=True))
@@ -248,6 +262,15 @@ def _confidences(model: Any, generated: Any) -> list[float | None]:
     was unsure about drags the line down instead of being averaged away by a run of easy ones.
     In a dosage, that uncertain token is the one that matters.
 
+    BEAM SEARCH NEEDS ITS OWN ARGUMENT, OR THE SCORES ARE FOR THE WRONG SEQUENCE. When
+    `num_beams > 1`, `generate()` explores several candidate continuations per line and
+    `generated.scores` holds the raw per-step distribution over ALL beams, not just the one
+    that was finally kept — the winning token at step N is not necessarily in the same beam
+    slot as the winning token at step N-1. `compute_transition_scores` needs `beam_indices` to
+    walk the beam that was actually selected at each step; without it, for a beam search
+    output, the scores line up with an arbitrary beam and the resulting "confidence" is a
+    number for a sequence the model did not return.
+
     Returns `None` per line, not a fallback number, when the generation did not expose usable
     scores — a model configuration that suppresses them is a reason to say "not measured",
     never a reason to invent a value.
@@ -255,8 +278,12 @@ def _confidences(model: Any, generated: Any) -> list[float | None]:
     try:
         import torch
 
+        beam_indices = getattr(generated, "beam_indices", None)
         scores = model.compute_transition_scores(
-            generated.sequences, generated.scores, normalize_logits=True
+            generated.sequences,
+            generated.scores,
+            beam_indices=beam_indices,
+            normalize_logits=True,
         )
     except Exception as exc:  # noqa: BLE001 — an unscored generation is a normal outcome
         log.info("ocr.handwriting_confidence_unavailable", error=str(exc)[:120])

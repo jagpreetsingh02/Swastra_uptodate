@@ -366,12 +366,36 @@ def test_a_region_reaches_a_document_span_with_its_box_and_identity() -> None:
     assert span.verbatim == "Tab Augmentin 625mg BD x 5d"
 
 
-def test_selecting_an_entity_identifies_exactly_one_region() -> None:
+def test_selecting_an_entity_identifies_exactly_one_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Clicking a medicine has to resolve to a box, and clicking a box has to name the
-    medicines it produced. Both directions, over the real ingest output."""
+    medicines it produced. Both directions, over the real `ingest()` path.
+
+    THE RECOGNIZER IS INJECTED, DELIBERATELY, EVEN THOUGH THIS RUNS `ingest()` FOR REAL. This
+    is a test of the LINKING — does `region_id` survive from `OCRBlock` through
+    `ExtractedEntity` to the API payload, in both directions — and that plumbing must hold
+    regardless of which recognizer answered. Asserting it against whatever happens to be
+    installed made the test's pass/fail depend on an environment property it never named: it
+    was green when no handwriting recognizer was available (Tesseract-line took over) and red
+    the moment the real `khedim/Medical-Prescription-OCR` was loaded, because that checkpoint's
+    actual output for this fixture is a memorized template unrelated to the pixels — see
+    `docs/adr/ADR-0017-khedim-verified-and-found-collapsed.md` — and matches none of
+    `entities.py`'s patterns. That is a true fact about the model, not a bug in the link, so
+    the link is tested here with a recognizer whose output is known, and the model's
+    reliability is verified and reported separately and honestly in the ADR.
+    """
     from app.contracts.record import FactLedger
     from app.modules.dialogue.ontology import load_ontology
     from app.modules.documents.pipeline import ingest
+
+    monkeypatch.setattr(
+        handwriting,
+        "default_recognizer",
+        lambda: StubRecognizer(
+            ["Tab Metformin 500mg TDS after food"] * WRITTEN_LINES, confidence=0.9
+        ),
+    )
 
     ledger = FactLedger(session_id="s_regions", consent_scopes={"documents"})
     result = ingest(
@@ -386,7 +410,7 @@ def test_selecting_an_entity_identifies_exactly_one_region() -> None:
     assert regions, "the review screen has nothing to draw without regions"
 
     items = payload["extracted"]
-    assert items, "this fixture must yield at least one extracted item"
+    assert items, "a known-good recognizer must still yield an extracted item"
     for item in items:
         region_id = item.get("regionId")
         assert region_id in regions, f"item {item['itemId']} points at no region"

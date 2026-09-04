@@ -181,9 +181,17 @@ class Settings(BaseSettings):
     handwriting_tokenizer_id: str = "roberta-base"
     handwriting_device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
     handwriting_batch_size: int = 8
-    #: One prescription line. Well above the longest real one, and it also bounds the cost of
-    #: a decoder that has started to repeat itself.
-    handwriting_max_new_tokens: int = 64
+    #: One prescription line. The checkpoint's own generation_config.json (khedim's) ships
+    #: 128; kept in step with that rather than an arbitrary tighter cap, so a long line is not
+    #: truncated by a limit this app invented. It also bounds the cost of a decoder that has
+    #: started to repeat itself.
+    handwriting_max_new_tokens: int = 128
+    #: Beam width for the REAL recognizer. `None` means "defer to the checkpoint's own
+    #: `generation_config.json`" — khedim's ships `num_beams: 4`, and overriding a fine-tune's
+    #: trained decoding strategy with a hardcoded greedy search is not running the actual
+    #: model, it is running a modified one. Set an int to force a specific width (1 for a fast
+    #: greedy pass while iterating).
+    handwriting_num_beams: int | None = None
     #: A Hugging Face access token. `khedim/Medical-Prescription-OCR` is a GATED repo: without
     #: a token that has been granted access the download 401s and the kiosk falls back to
     #: Tesseract. Never logged.
