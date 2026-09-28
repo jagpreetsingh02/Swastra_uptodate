@@ -265,9 +265,12 @@ Three things turned out differently from the plan, all recorded here rather than
 - **Dashavidha Pariksha is patient-reportable subset only.** Classical Prakriti assessment rests
   on observation and pulse examination by a vaidya. The physician screen labels it
   "patient-reported, pending vaidya examination" (ADR-0009).
-- **The Bhashini backend is written but unverified against the live endpoint** — we have no
-  government credentials. Request/response shapes follow the published pipeline contract; treat
-  the first live call as an integration test.
+- **Bhashini is verified live, on synthesised speech only** (ADR-0018). The first live calls
+  found the old backend could never have worked (a 404 endpoint and one service ID for every
+  language); both are fixed. TTS works in 12 languages; ASR round-trips in 11 — but on audio
+  Bhashini itself generated, not on real patients in an OPD, and Gujarati ASR is unverified.
+  The kiosk uses it only to read prompts on devices with no voice for the patient's language.
+  Failures hang rather than error, so calls time out at 5 s and fall back to the browser.
 - **The HIS endpoint is a documented FHIR `POST /Bundle` with a stub receiver.** No vendor
   integration, per the problem statement's scope.
 

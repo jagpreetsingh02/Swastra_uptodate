@@ -1,0 +1,46 @@
+# Bhashini (Dhruva) service IDs, per task and per language. See ADR-0018.
+#
+# Dhruva does not take one "pipeline ID" for everything: every model is its own service, and
+# the ID depends on both the task and the language family. The first version of
+# app/speech/bhashini.py sent a single BHASHINI_PIPELINE_ID as `serviceId` for ASR and TTS in
+# every language, which can only ever have matched one of the twenty-odd cells below.
+#
+# Every ID here was verified by a live call on 2026-09-28, not copied from documentation:
+#   TTS — each language synthesised a short clinical sentence (WAV, 32-bit float, 22.05 kHz).
+#   ASR — that same audio, resampled to 16 kHz PCM, was transcribed back. The round trip came
+#         back near-verbatim in all eleven languages it was run for.
+# Latency on success was 0.3–1.3 s (median 0.44 s). Failures do not error fast — they hang —
+# which is why the client timeout is short (BHASHINI_TIMEOUT_SECONDS).
+#
+# A language missing from a task is not an error: the backend reports it unavailable and the
+# kiosk keeps the question on screen, which is exactly what happens without Bhashini at all.
+
+asr:
+  en: ai4bharat/whisper-medium-en--gpu--t4
+  hi: ai4bharat/conformer-hi-gpu--t4
+  bn: ai4bharat/conformer-multilingual-indo_aryan-gpu--t4
+  mr: ai4bharat/conformer-multilingual-indo_aryan-gpu--t4
+  pa: ai4bharat/conformer-multilingual-indo_aryan-gpu--t4
+  or: ai4bharat/conformer-multilingual-indo_aryan-gpu--t4
+  as: ai4bharat/conformer-multilingual-indo_aryan-gpu--t4
+  ta: ai4bharat/conformer-multilingual-dravidian-gpu--t4
+  te: ai4bharat/conformer-multilingual-dravidian-gpu--t4
+  kn: ai4bharat/conformer-multilingual-dravidian-gpu--t4
+  ml: ai4bharat/conformer-multilingual-dravidian-gpu--t4
+  # gu — ASR NOT VERIFIED. Its TTS was too unreliable during verification to produce the
+  # audio the round trip needs. Left out rather than guessed; add it after a live check.
+
+tts:
+  en: ai4bharat/indic-tts-coqui-misc-gpu--t4
+  hi: ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4
+  bn: ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4
+  mr: ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4
+  pa: ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4
+  or: ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4
+  as: ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4
+  # gu works, but was the flakiest cell: roughly 3 of 7 calls failed (one 500, two hangs).
+  gu: ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4
+  ta: ai4bharat/indic-tts-coqui-dravidian-gpu--t4
+  te: ai4bharat/indic-tts-coqui-dravidian-gpu--t4
+  kn: ai4bharat/indic-tts-coqui-dravidian-gpu--t4
+  ml: ai4bharat/indic-tts-coqui-dravidian-gpu--t4

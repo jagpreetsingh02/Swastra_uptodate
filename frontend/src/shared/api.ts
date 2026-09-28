@@ -981,7 +981,12 @@ export const api = {
       body: JSON.stringify({ questionId }),
     }),
   speak: (ref: string, text: string) =>
-    request<{ audioBase64: string | null; clientFallback: boolean; backend: string }>(
+    request<{
+      audioBase64: string | null;
+      clientFallback: boolean;
+      backend: string;
+      mediaType: string;
+    }>(
       `/api/v1/sessions/${ref}/dialogue/speak`,
       { method: 'POST', body: JSON.stringify({ text }) },
     ),

@@ -295,6 +295,22 @@ async def speak(
     if not text:
         raise ValidationError("text is required.")
     utterance = get_speech().synthesise(text, language=context.row.language)
+    if utterance.model is not None:
+        # Invariant 6. A hosted TTS model is an AI call like any other, including when it
+        # failed — the attempt left the building either way.
+        await record_ai_call(
+            db,
+            actor=identity.actor,
+            actor_role=identity.role,
+            action="speech.synthesise",
+            model_name=utterance.model,
+            model_version=utterance.backend,
+            prompt=text,
+            abha_ref=context.row.abha_ref,
+            consent_ref=context.row.consent_ref,
+            outcome="failure" if utterance.client_fallback else "success",
+            response_summary={"language": utterance.language, "bytes": len(utterance.audio)},
+        )
     import base64
 
     return {

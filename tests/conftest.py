@@ -19,6 +19,9 @@ os.environ["TESTING"] = "1"
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("LLM_BACKEND", "offline")
+# Same reason as LLM_BACKEND: `.env` may set SPEECH_BACKEND=bhashini with a live key, and the
+# suite must never reach a hosted engine. Bhashini is tested against a stubbed httpx.post.
+os.environ.setdefault("SPEECH_BACKEND", "local")
 os.environ["REQUIRE_SUPABASE"] = "false"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

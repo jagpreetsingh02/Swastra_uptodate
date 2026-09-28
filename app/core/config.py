@@ -156,10 +156,15 @@ class Settings(BaseSettings):
     speech_backend: Literal["local", "whisper", "bhashini", "client"] = "local"
     #: Below this ASR confidence the question degrades to touch rather than guessing.
     asr_confidence_threshold: float = 0.62
-    bhashini_base_url: str = "https://dhruva-api.bhashini.gov.in/services/inference"
+    #: `/pipeline` is the compute endpoint; the bare `/services/inference` 404s.
+    bhashini_base_url: str = "https://dhruva-api.bhashini.gov.in/services/inference/pipeline"
+    #: The Inference API key — sent as the `Authorization` header. The only credential the
+    #: compute call needs. Service IDs come from config/bhashini-services.yaml (ADR-0018).
     bhashini_api_key: str | None = None
     bhashini_user_id: str | None = None
-    bhashini_pipeline_id: str | None = None
+    #: Dhruva succeeds in ~0.4 s or hangs for 20 s+; nothing in between was observed. Short,
+    #: so a hung call falls back to the on-screen question instead of stalling the patient.
+    bhashini_timeout_seconds: float = 5.0
     vosk_model_dir: str | None = None
 
     # --- documents (Module B) ---

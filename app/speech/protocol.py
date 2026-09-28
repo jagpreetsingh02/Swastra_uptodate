@@ -77,6 +77,10 @@ class Utterance:
     backend: str
     #: True when the backend could not synthesise and the client must use its own TTS.
     client_fallback: bool = False
+    #: The hosted model that was called, whether or not the call succeeded, or None when no
+    #: hosted model was involved. The route writes an audit row exactly when this is set —
+    #: Invariant 6: every AI call lands in the hash-chained log.
+    model: str | None = None
 
 
 class SpeechBackend(Protocol):

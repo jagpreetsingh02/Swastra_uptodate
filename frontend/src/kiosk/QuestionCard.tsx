@@ -28,6 +28,8 @@ import { press } from '../design/motion';
 
 interface Props {
   question: Question;
+  /** Lets a prompt be read by the server voice when this device has none for the language. */
+  sessionRef: string;
   voice: VoiceOutcome | null;
   busy: boolean;
   /** Whether the patient granted the `voice` consent scope. When they did not, the
@@ -49,6 +51,7 @@ interface Props {
 
 export function QuestionCard({
   question,
+  sessionRef,
   voice,
   busy,
   voiceEnabled,
@@ -63,7 +66,7 @@ export function QuestionCard({
 }: Props): JSX.Element {
   const [selected, setSelected] = useState<string[]>([]);
   const [typed, setTyped] = useState('');
-  const speech = useSpeech(question.language);
+  const speech = useSpeech(question.language, sessionRef);
   const spokenFor = useRef<string | null>(null);
 
   const multi = question.kind === 'multi_choice';

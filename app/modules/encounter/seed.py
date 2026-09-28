@@ -119,7 +119,13 @@ def transcribe_seed_voice() -> tuple[str, float | None, str, int]:
     try:
         from app.speech.registry import get_speech
 
-        transcript = get_speech().transcribe(
+        backend = get_speech()
+        if not getattr(backend, "offline", True):
+            # A hosted engine at boot is an AI call with no session to audit it against
+            # (Invariant 6), and made on synthetic data. Same honest absence as no model.
+            log.info("seed.voice_asr_skipped_hosted", backend=backend.name)
+            return spoken, None, "unavailable", 0
+        transcript = backend.transcribe(
             wav.read_bytes(), language="en", media_type="audio/wav"
         )
     except Exception as exc:

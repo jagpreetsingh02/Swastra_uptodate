@@ -169,6 +169,17 @@ export function pickVoice(
   return { voice: english, fellBackToEnglish: english !== null };
 }
 
+/**
+ * Whether this device can read `language` in a voice OF that language. An English fallback
+ * does not count — that is the case `hostedVoice` exists to replace.
+ */
+export async function hasNativeVoice(language: string): Promise<boolean> {
+  if (!synth()) return false;
+  const voices = await loadVoices();
+  const { voice, fellBackToEnglish } = pickVoice(voices, language);
+  return voice !== null && !fellBackToEnglish;
+}
+
 // ---------------------------------------------------------------- autoplay
 
 let unlocked = false;

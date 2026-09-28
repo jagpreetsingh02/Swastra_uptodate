@@ -9,10 +9,16 @@
  *
  * Barge-in: the moment recognition detects speech, any prompt still being spoken is cancelled.
  * A patient should never have to wait for a machine to finish talking.
+ *
+ * The one exception to on-device: when the device has no voice OF the patient's language and
+ * a session exists, the prompt is read by the server (Bhashini, ADR-0018) instead of left
+ * silent or read by an English voice. If that fails, the browser path runs exactly as before.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { cancelHosted, speakHosted } from './hostedVoice';
 import {
   cancelSpeech as cancelTts,
+  hasNativeVoice,
   localeFor,
   speak as speakTts,
   ttsSupported,
@@ -105,7 +111,12 @@ export interface UseSpeech {
  */
 const DEAD_ENGINE_MS = 6000;
 
-export function useSpeech(language: string): UseSpeech {
+/**
+ * @param hostedRef The session to read prompts through when the device has no voice for the
+ *   language. `null` before a session exists (the consent screen), which keeps the browser
+ *   voice as the only option there.
+ */
+export function useSpeech(language: string, hostedRef: string | null = null): UseSpeech {
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -128,6 +139,7 @@ export function useSpeech(language: string): UseSpeech {
 
   const cancelSpeech = useCallback(() => {
     cancelTts();
+    cancelHosted();
     speakingRef.current = false;
     setSpeaking(false);
   }, []);
@@ -246,7 +258,14 @@ export function useSpeech(language: string): UseSpeech {
     async (text: string): Promise<SpeakResult> => {
       setSpeaking(true);
       speakingRef.current = true;
-      const result = await speakTts(text, language);
+      let result: SpeakResult | null = null;
+      if (hostedRef && !(await hasNativeVoice(language))) {
+        result = await speakHosted(hostedRef, text);
+        // Anything but a clean outcome falls through to the browser, so the patient is never
+        // worse off than without the server voice.
+        if (result.status !== 'spoken' && result.status !== 'cancelled') result = null;
+      }
+      if (result === null) result = await speakTts(text, language);
       speakingRef.current = false;
       setSpeaking(false);
 
@@ -265,7 +284,7 @@ export function useSpeech(language: string): UseSpeech {
       );
       return result;
     },
-    [language],
+    [language, hostedRef],
   );
 
   useEffect(
@@ -288,7 +307,7 @@ export function useSpeech(language: string): UseSpeech {
     speak,
     cancelSpeech,
     speaking,
-    canSpeak: ttsSupported(),
+    canSpeak: ttsSupported() || hostedRef !== null,
     speechNotice,
   };
 }

@@ -255,6 +255,7 @@ export function KioskApp(): JSX.Element {
             </div>
             <QuestionCard
             question={question}
+            sessionRef={sessionRef}
             voice={voice}
             busy={busy}
             voiceEnabled={scopes.includes('voice')}
