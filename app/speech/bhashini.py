@@ -154,15 +154,22 @@ class BhashiniSpeechBackend:
         except UpstreamUnavailable as exc:
             log.warning("speech.bhashini_tts_failed", language=language, error=str(exc)[:200])
             return self._fallback(text, language, model=service)
-        output = (body.get("pipelineResponse") or [{}])[0].get("audio") or [{}]
-        encoded = output[0].get("audioContent", "")
+        try:
+            output = (body.get("pipelineResponse") or [{}])[0].get("audio") or [{}]
+            encoded = output[0].get("audioContent", "")
+            audio = base64.b64decode(encoded, validate=True) if encoded else b""
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+            # A 200 with a body we cannot read is a failed call like any other: the patient
+            # gets the browser voice and the attempt is still audited, never a 500.
+            log.warning("speech.bhashini_tts_unreadable", language=language, error=str(exc)[:200])
+            return self._fallback(text, language, model=service)
         return Utterance(
-            audio=base64.b64decode(encoded) if encoded else b"",
+            audio=audio,
             media_type="audio/wav",
             text=text,
             language=language,
             backend=self.name,
-            client_fallback=not encoded,
+            client_fallback=not audio,
             model=service,
         )
 

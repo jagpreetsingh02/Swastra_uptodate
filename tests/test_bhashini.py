@@ -132,6 +132,32 @@ def test_an_empty_response_is_a_fallback_not_silence(keyed, monkeypatch) -> None
     assert B.BhashiniSpeechBackend().synthesise("Hello", language="en").client_fallback
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"pipelineResponse": "not a list"},
+        {"pipelineResponse": [{"audio": [{"audioContent": "!!not base64!!"}]}]},
+        {"pipelineResponse": [{"audio": "not a list"}]},
+    ],
+)
+def test_an_unreadable_200_is_a_fallback_not_a_500(keyed, monkeypatch, body: dict) -> None:
+    """Dhruva answered, but with nothing we can play. The patient gets the browser voice, and
+    the attempt still names its model so the route audits it."""
+    _stub(monkeypatch, body=body)
+    utterance = B.BhashiniSpeechBackend().synthesise("Hello", language="en")
+    assert utterance.client_fallback
+    assert utterance.audio == b""
+    assert utterance.model == B.load_services()["tts"]["en"]
+
+
+def test_the_key_is_never_in_what_a_failed_call_logs(keyed, monkeypatch, capsys) -> None:
+    _stub(monkeypatch, fail=httpx.ConnectError("refused"))
+    B.BhashiniSpeechBackend().synthesise("Hello", language="en")
+    logged = "".join(capsys.readouterr())
+    assert "speech.bhashini_tts_failed" in logged, "the failure must be logged to be checked"
+    assert "test-inference-key" not in logged
+
+
 def test_an_unsupported_language_makes_no_call_and_nothing_to_audit(keyed, monkeypatch) -> None:
     stub = _stub(monkeypatch)
     utterance = B.BhashiniSpeechBackend().synthesise("Hello", language="xx")
