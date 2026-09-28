@@ -133,7 +133,12 @@ async def overview(db: AsyncSession, patient: Patient) -> dict[str, Any]:
     # sessionmaker made this function ignore its own `db` argument, which broke every test
     # that passes a session bound to its own in-memory engine — and, worse, would have made
     # the function silently invisible to a caller's open transaction.
-    bind = db.get_bind() if db.bind is None else db.bind
+    #
+    # There is no fallback for an unbound session: `db.get_bind()` returns the *sync* Engine,
+    # which `async_sessionmaker` cannot use. Every session here comes from an async engine.
+    bind = db.bind
+    if bind is None:
+        raise RuntimeError("patient history needs a session bound to an async engine")
     maker = async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession)
 
     #: At most two of the four reads are in flight at once. See the docstring: this is the

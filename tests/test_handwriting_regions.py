@@ -395,6 +395,10 @@ def test_selecting_an_entity_identifies_exactly_one_region(
     # lane's own region<->entity linking, so it turns the lane on for its own duration, the
     # same way a test for a feature flag flips the flag to exercise the code it guards.
     monkeypatch.setattr(settings, "handwriting_ocr_enabled", True)
+    # The lane is gated on torch being importable, but the recognizer below is a stub, so
+    # torch is never used. Without this the test passed only on machines that happened to
+    # have the optional requirements-handwriting.txt installed.
+    monkeypatch.setattr(handwriting, "dependencies_available", lambda: True)
     monkeypatch.setattr(
         handwriting,
         "default_recognizer",
@@ -439,6 +443,10 @@ def test_the_region_payload_carries_what_the_drawer_has_to_show(
     from app.modules.documents.pipeline import ingest
 
     monkeypatch.setattr(settings, "handwriting_ocr_enabled", True)
+    # Past the torch gate so the lane runs either way: with torch and the weights it reads
+    # with Khedim; without them `load_model` raises UpstreamUnavailable and the lane reads
+    # line by line with Tesseract. The payload shape asserted below is the same for both.
+    monkeypatch.setattr(handwriting, "dependencies_available", lambda: True)
 
     ledger = FactLedger(session_id="s_payload", consent_scopes={"documents"})
     payload = ingest(
