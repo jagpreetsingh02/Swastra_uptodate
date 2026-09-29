@@ -7,8 +7,9 @@ development. Read it the morning of, not during.
 
 ## 0. The deployed URLs — this is what you actually present
 
-* **Frontend (Vercel):** `https://medikiosk.vercel.app` — static build of the Vite app.
-  `<update this line once the Vercel import finishes; the placeholder is the requested name>`
+* **Frontend (Vercel):** `https://medi-kiosk-fe.vercel.app` — static build of the Vite app
+  (Vercel project `medi-kiosk-fe`). `medikiosk.vercel.app`, the name first requested, belongs to
+  someone else's login-protected project; do not send people there.
 * **Backend (Render, Docker, free tier):** `https://medikiosk-api-docker.onrender.com` —
   built from the repo's own `Dockerfile`, so Tesseract is the same binary that was tested
   locally, not a substitute. Confirmed via `/about`: `isSupabase: true`, both OCR backends
@@ -17,8 +18,11 @@ development. Read it the morning of, not during.
   outbound network reaches it over IPv4, same as the pooler was chosen for in the first place.
 
 **COLD START IS REAL ON THE FREE TIER.** Render spins the backend down after **15 minutes**
-idle; the first request after a sleep takes 30–60 seconds while the container boots and
-reconnects to Supabase.
+idle. A sleeping service does not answer slowly, it REFUSES: measured 2026-09-29, the first
+request after 17 idle minutes came back instantly as `429 Too Many Requests` (plain text,
+`x-render-routing: hibernate-rate-limited`), and the service was up ~33 seconds later. The
+frontend now treats that as "waking": it shows the wake banner and retries for up to 90 seconds
+(`shared/api.ts`), so a patient no longer sees "Something went wrong at our end" for it.
 
 > **WARM THE BACKEND ~2 MINUTES BEFORE PRESENTING** by hitting `/about`:
 >

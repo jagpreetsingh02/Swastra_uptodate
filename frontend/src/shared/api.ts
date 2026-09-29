@@ -826,6 +826,27 @@ export function subscribeToWakeState(fn: WakeListener): () => void {
   return () => wakeListeners.delete(fn);
 }
 
+/**
+ * A SLEEPING RENDER BACKEND DOES NOT ANSWER SLOWLY — IT REFUSES. Measured on the deployed
+ * service after 17 idle minutes: the first request came back in 0.3s as `429 Too Many Requests`,
+ * plain text, `x-render-routing: hibernate-rate-limited`. The next one woke it (32.6s) and every
+ * one after that answered in ~0.3s. That 429 used to surface to a patient starting a visit as
+ * "Something went wrong at our end" — true of nothing: the service was simply asleep.
+ *
+ * So a response that is the HOST's rather than Swastra's (every Swastra error is a JSON
+ * OperationOutcome) is treated as "still waking": the wake banner shows and the request is
+ * retried with backoff for up to WAKE_RETRY_BUDGET_MS. It is only re-sent where that is safe:
+ * a 429/503 was refused before the app ran, so any method may be re-sent; a 502/504 may have
+ * reached the app, so only a read is.
+ */
+const WAKE_RETRY_BUDGET_MS = 90_000;
+
+function isHostWakeResponse(response: Response, method: string): boolean {
+  if ((response.headers.get('content-type') ?? '').includes('json')) return false;
+  if (response.status === 429 || response.status === 503) return true;
+  return (response.status === 502 || response.status === 504) && (method === 'GET' || method === 'HEAD');
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json');
@@ -838,27 +859,46 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     }, WAKE_THRESHOLD_MS);
   }
 
+  const method = (init.method ?? 'GET').toUpperCase();
+  const started = Date.now();
+  let waited = false;
+  let attempt = 0;
   let response: Response;
-  try {
-    response = await fetch(path, { ...init, headers });
-  } catch (cause) {
+  for (;;) {
+    try {
+      response = await fetch(path, { ...init, headers });
+    } catch (cause) {
+      if (wakeTimer || waited) {
+        if (wakeTimer) clearTimeout(wakeTimer);
+        warmed = true;
+        wakeListeners.forEach((fn) => fn(false));
+      }
+      // The API is down, the network dropped, or the dev server is up without the
+      // backend behind it. `fetch` rejects with a bare TypeError here, which used to
+      // escape uncaught and surface to the patient as raw JS.
+      throw new ApiError(
+        'We cannot reach the health service right now. Please ask a staff member for help.',
+        OFFLINE,
+        'offline',
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    }
+    if (!isHostWakeResponse(response, method) || Date.now() - started > WAKE_RETRY_BUDGET_MS) {
+      break;
+    }
+    // The service is asleep and waking. Say so — even on a page that was already warm, since
+    // a kiosk left idle for 15 minutes is exactly how it falls asleep — and try again.
     if (wakeTimer) {
       clearTimeout(wakeTimer);
-      warmed = true;
-      wakeListeners.forEach((fn) => fn(false));
+      wakeTimer = null;
     }
-    // The API is down, the network dropped, or the dev server is up without the
-    // backend behind it. `fetch` rejects with a bare TypeError here, which used to
-    // escape uncaught and surface to the patient as raw JS.
-    throw new ApiError(
-      'We cannot reach the health service right now. Please ask a staff member for help.',
-      OFFLINE,
-      'offline',
-      cause instanceof Error ? cause.message : String(cause),
-    );
+    waited = true;
+    wakeListeners.forEach((fn) => fn(true));
+    attempt += 1;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(2000 * attempt, 8000)));
   }
-  if (wakeTimer) {
-    clearTimeout(wakeTimer);
+  if (wakeTimer || waited) {
+    if (wakeTimer) clearTimeout(wakeTimer);
     warmed = true;
     wakeListeners.forEach((fn) => fn(false));
   }
@@ -870,6 +910,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   } catch {
     // A proxy error page or an HTML 502 — anything that is not the JSON we expect.
     // Parsing it used to throw a SyntaxError from inside the client.
+    if (!response.ok && [429, 502, 503, 504].includes(response.status)) {
+      // Still the host, still waking, after the whole retry budget: say that, not "broken".
+      throw new ApiError(
+        'The health service is still starting up. Please wait a minute and try again.',
+        response.status,
+        'waking',
+        text.slice(0, 200),
+      );
+    }
     if (!response.ok) {
       throw new ApiError(
         'Something went wrong at our end. Please ask a staff member for help.',
